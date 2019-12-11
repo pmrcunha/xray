@@ -6,7 +6,10 @@ export {
   Oid,
   Path,
   Point,
-  Range
+  Range,
+  ReplicaId,
+  SelectionRanges,
+  SelectionSetId
 } from "./support";
 import {
   BufferId,
@@ -19,7 +22,11 @@ import {
   Oid,
   Path,
   Range,
-  Tagged
+  ReplicaId,
+  SelectionRanges,
+  SelectionSetId,
+  Tagged,
+  fromMemoSelectionRanges
 } from "./support";
 
 let memo: any;
@@ -36,13 +43,13 @@ async function init() {
 export type Version = Tagged<Uint8Array, "Version">;
 export type Operation = Tagged<Uint8Array, "Operation">;
 export type EpochId = Tagged<Uint8Array, "EpochId">;
-export type ReplicaId = Tagged<string, "ReplicaId">;
 export interface OperationEnvelope {
   epochId(): EpochId;
   epochTimestamp(): number;
   epochReplicaId(): ReplicaId;
   epochHead(): null | Oid;
   operation(): Operation;
+  isSelectionUpdate(): boolean;
 }
 
 export enum FileStatus {
@@ -58,7 +65,8 @@ export interface Entry {
   readonly depth: number;
   readonly type: FileType;
   readonly name: string;
-  readonly path: string;
+  readonly path: Path;
+  readonly basePath: Path | null;
   readonly status: FileStatus;
   readonly visible: boolean;
 }
@@ -104,6 +112,10 @@ export class WorkTree {
     return this.tree.head();
   }
 
+  epochId(): EpochId {
+    return this.tree.epoch_id();
+  }
+
   reset(base: Oid | null): AsyncIterable<OperationEnvelope> {
     return this.tree.reset(base);
   }
@@ -147,10 +159,24 @@ export class WorkTree {
     }
     return buffer;
   }
+
+  setActiveLocation(buffer: Buffer | null): OperationEnvelope {
+    return this.tree.set_active_location(buffer ? buffer.id : null);
+  }
+
+  getReplicaLocations(): Map<ReplicaId, Path> {
+    const locations = this.tree.replica_locations();
+
+    const map = new Map<ReplicaId, Path>();
+    for (const replicaId in locations) {
+      map.set(replicaId as ReplicaId, locations[replicaId] as Path);
+    }
+    return map;
+  }
 }
 
 export class Buffer {
-  private id: BufferId;
+  id: BufferId;
   private tree: any;
   private observer: ChangeObserver;
 
@@ -164,12 +190,30 @@ export class Buffer {
     return this.tree.edit(this.id, oldRanges, newText);
   }
 
+  addSelectionSet(ranges: Range[]): [SelectionSetId, OperationEnvelope] {
+    const result = this.tree.add_selection_set(this.id, ranges);
+    return [result.set_id(), result.operation()];
+  }
+
+  replaceSelectionSet(id: SelectionSetId, ranges: Range[]): OperationEnvelope {
+    return this.tree.replace_selection_set(this.id, id, ranges);
+  }
+
+  removeSelectionSet(id: SelectionSetId): OperationEnvelope {
+    return this.tree.remove_selection_set(this.id, id);
+  }
+
   getPath(): string | null {
     return this.tree.path(this.id);
   }
 
   getText(): string {
     return this.tree.text(this.id);
+  }
+
+  getSelectionRanges(): SelectionRanges {
+    const selections = this.tree.selection_ranges(this.id);
+    return fromMemoSelectionRanges(selections);
   }
 
   onChange(callback: ChangeObserverCallback): Disposable {
